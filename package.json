@@ -1,6 +1,6 @@
 {
   "name": "fanqie-writer-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "番茄小说作家后台 MCP 服务——从本地稿件目录批量上传章节（零依赖，Node 直接运行）",
   "keywords": [
     "mcp",
@@ -8,15 +8,21 @@
     "fanqienovel",
     "番茄小说",
     "writer",
-    "batch-upload"
+    "batch-upload",
+    "novel",
+    "stdio",
+    "streamable-http"
   ],
   "license": "MIT",
   "main": "server.js",
   "bin": {
-    "fanqie-writer-mcp": "server.js"
+    "fanqie-writer-mcp": "server.js",
+    "fanqie-writer-config": "mcp-config.mjs"
   },
   "scripts": {
     "start": "node server.js",
+    "start:http": "node server.js --http 8787",
+    "config": "node mcp-config.mjs",
     "upload": "node upload-batch.mjs",
     "delete": "node delete-batch.mjs",
     "capture-login": "node capture-login.mjs",
@@ -25,8 +31,17 @@
   "engines": {
     "node": ">=22.4.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CommitByRyan/fanqie-writer-mcp.git"
+  },
+  "homepage": "https://github.com/CommitByRyan/fanqie-writer-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/CommitByRyan/fanqie-writer-mcp/issues"
+  },
   "files": [
     "server.js",
+    "mcp-config.mjs",
     "upload-batch.mjs",
     "delete-batch.mjs",
     "capture-login.mjs",

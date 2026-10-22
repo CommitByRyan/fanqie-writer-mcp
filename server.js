@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * fanqie-writer-mcp —— 番茄小说作家后台 MCP 服务（stdio，零依赖）
+ * fanqie-writer-mcp —— 番茄小说作家后台 MCP 服务（零依赖）
  *
  * 目标：解决网页端一次只能传一章的问题，支持从本地稿件目录批量上传。
  *
@@ -9,16 +9,25 @@
  *       优先读环境变量 FANQIE_COOKIE / FANQIE_CSRF_TOKEN，
  *       否则读本目录 auth.json（见 auth.json.example）。
  *
- * 协议：MCP over stdio，换行分隔 JSON-RPC 2.0。日志一律走 stderr。
+ * 传输：默认 stdio（换行分隔 JSON-RPC 2.0）；加 --http <port> 时额外监听
+ *       Streamable HTTP（POST/GET/DELETE /mcp），供 Dify / n8n / 扣子 /
+ *       ChatGPT Connectors 等只接受 HTTP 的平台型客户端接入。
+ *       两种传输共用同一份工具实现，行为完全一致。
+ *
+ * 日志：一律走 stderr，stdout 只承载 stdio 传输的 JSON-RPC 报文。
  */
 "use strict";
 
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
 
 const SERVER_NAME = "fanqie-writer";
-const SERVER_VERSION = "1.0.0";
-const PROTOCOL_VERSION = "2024-11-05";
+const SERVER_VERSION = "1.1.0";
+// 协议版本按客户端请求回协商：优先采用客户端发起 initialize 时声明的版本，
+// 缺省用最新稳定版。2025-03-26 起支持 Streamable HTTP，2025-06-18 移除批量请求。
+const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+const DEFAULT_PROTOCOL_VERSION = "2025-11-25";
 const BASE = "https://fanqienovel.com";
 const DEFAULT_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
@@ -973,19 +982,13 @@ const TOOLS = [
 ];
 
 // ---------------------------------------------------------------------------
-// MCP 协议（stdio, newline-delimited JSON-RPC 2.0）
+// MCP 协议核心（传输无关）
 // ---------------------------------------------------------------------------
 
-function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + "\n");
-}
-
-function reply(id, result) {
-  send({ jsonrpc: "2.0", id, result });
-}
-
-function replyError(id, code, message) {
-  send({ jsonrpc: "2.0", id, error: { code, message } });
+/** 挑选双方都支持的协议版本：客户端声明的版本优先，否则回落到最新稳定版。 */
+function negotiateProtocolVersion(requested) {
+  if (typeof requested === "string" && PROTOCOL_VERSIONS.includes(requested)) return requested;
+  return DEFAULT_PROTOCOL_VERSION;
 }
 
 async function handleToolCall(params) {
@@ -1009,39 +1012,65 @@ async function handleToolCall(params) {
   }
 }
 
-async function onMessage(msg) {
+/**
+ * 处理一条 JSON-RPC 消息。
+ * 返回待发送的响应对象；通知（无 id）返回 null。
+ * 该函数不触碰 stdout，stdio 与 HTTP 两种传输共用。
+ */
+async function handleRpc(msg) {
   const { id, method, params } = msg || {};
+
   if (method === "initialize") {
-    reply(id, {
-      protocolVersion: PROTOCOL_VERSION,
-      capabilities: { tools: {} },
-      serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-    });
-    return;
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion: negotiateProtocolVersion(params?.protocolVersion),
+        capabilities: { tools: {} },
+        serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+      },
+    };
   }
-  if (method === "notifications/initialized" || method === "notifications/cancelled") return;
+
+  if (
+    method === "notifications/initialized" ||
+    method === "notifications/cancelled" ||
+    method === "notifications/progress" ||
+    method === "notifications/roots/list_changed"
+  ) {
+    return null;
+  }
+
   if (method === "ping") {
-    reply(id, {});
-    return;
+    return { jsonrpc: "2.0", id, result: {} };
   }
   if (method === "tools/list") {
-    reply(id, {
-      tools: TOOLS.map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema,
-      })),
-    });
-    return;
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        tools: TOOLS.map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+        })),
+      },
+    };
   }
   if (method === "tools/call") {
-    reply(id, await handleToolCall(params));
-    return;
+    return { jsonrpc: "2.0", id, result: await handleToolCall(params) };
   }
-  if (id !== undefined) replyError(id, -32601, `Method not found: ${method}`);
+  if (id !== undefined) {
+    return { jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } };
+  }
+  return null;
 }
 
-function main() {
+// ---------------------------------------------------------------------------
+// 传输层 A：stdio（默认）
+// ---------------------------------------------------------------------------
+
+function startStdio() {
   let buf = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => {
@@ -1058,14 +1087,247 @@ function main() {
         process.stderr.write(`[fanqie-writer] 非法 JSON 行：${e.message}\n`);
         continue;
       }
-      Promise.resolve(onMessage(msg)).catch((e) => {
-        process.stderr.write(`[fanqie-writer] 处理失败：${e.stack || e.message}\n`);
-        if (msg && msg.id !== undefined) replyError(msg.id, -32603, String(e.message || e));
-      });
+      Promise.resolve(handleRpc(msg))
+        .then((res) => {
+          if (res) process.stdout.write(JSON.stringify(res) + "\n");
+        })
+        .catch((e) => {
+          process.stderr.write(`[fanqie-writer] 处理失败：${e.stack || e.message}\n`);
+          if (msg && msg.id !== undefined) {
+            process.stdout.write(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: msg.id,
+                error: { code: -32603, message: String(e.message || e) },
+              }) + "\n",
+            );
+          }
+        });
     }
   });
   process.stdin.on("end", () => process.exit(0));
-  process.stderr.write(`[fanqie-writer] ${SERVER_NAME} v${SERVER_VERSION} 启动\n`);
+  process.stderr.write(`[fanqie-writer] ${SERVER_NAME} v${SERVER_VERSION} 启动（stdio）\n`);
+}
+
+// ---------------------------------------------------------------------------
+// 传输层 B：Streamable HTTP
+// ---------------------------------------------------------------------------
+
+const sessions = new Map(); // sessionId -> { createdAt, lastSeen }
+
+function makeSessionId() {
+  return "fw-" + require("crypto").randomBytes(16).toString("hex");
+}
+
+function jsonRpcError(id, code, message) {
+  return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+function sseWrite(res, data) {
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function startHttp(port, host) {
+  const srv = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+
+    // CORS：Streamable HTTP 客户端（浏览器端 Agent、网页版 IDE）需要预检放行
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, MCP-Protocol-Version, Authorization");
+    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (url.pathname === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", server: SERVER_NAME, version: SERVER_VERSION }));
+      return;
+    }
+
+    if (url.pathname !== "/mcp") {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "not found", hint: "MCP endpoint is /mcp" }));
+      return;
+    }
+
+    // 访问令牌：设置 FANQIE_HTTP_TOKEN 后，HTTP 端点要求 Bearer 鉴权。
+    // 暴露到局域网或公网时务必设置。
+    const httpToken = process.env.FANQIE_HTTP_TOKEN || "";
+    if (httpToken) {
+      const authHeader = String(req.headers.authorization || "");
+      const bearer = authHeader.replace(/^Bearer\s+/i, "").trim();
+      if (bearer !== httpToken) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: null,
+            error: { code: -32001, message: "Unauthorized: 需要 Authorization: Bearer <FANQIE_HTTP_TOKEN>" },
+          }),
+        );
+        return;
+      }
+    }
+
+    const sessionId = req.headers["mcp-session-id"];
+
+    // GET /mcp：建立服务端事件流（本服务无主动推送，保留以兼容 SSE 型客户端）
+    if (req.method === "GET") {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
+      });
+      sseWrite(res, { jsonrpc: "2.0", method: "notifications/initialized" });
+      const keepAlive = setInterval(() => res.write(": ping\n\n"), 25000);
+      req.on("close", () => clearInterval(keepAlive));
+      return;
+    }
+
+    // DELETE /mcp：终止会话
+    if (req.method === "DELETE") {
+      if (sessionId) sessions.delete(sessionId);
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (req.method !== "POST") {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "method not allowed" }));
+      return;
+    }
+
+    let raw;
+    try {
+      raw = await readBody(req);
+    } catch (e) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(jsonRpcError(null, -32700, String(e.message))));
+      return;
+    }
+
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch (e) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(jsonRpcError(null, -32700, `parse error: ${e.message}`)));
+      return;
+    }
+
+    // 通知类消息不回响应体
+    if (msg && msg.id === undefined) {
+      try {
+        await handleRpc(msg);
+      } catch (e) {
+        process.stderr.write(`[fanqie-writer] 处理失败：${e.stack || e.message}\n`);
+      }
+      res.writeHead(202);
+      res.end();
+      return;
+    }
+
+    let result;
+    try {
+      result = await handleRpc(msg);
+    } catch (e) {
+      process.stderr.write(`[fanqie-writer] 处理失败：${e.stack || e.message}\n`);
+      result = jsonRpcError(msg?.id, -32603, String(e.message || e));
+    }
+
+    // initialize 时下发会话 ID
+    const headers = { "Content-Type": "application/json" };
+    if (msg?.method === "initialize" && !sessionId) {
+      const sid = makeSessionId();
+      sessions.set(sid, { createdAt: Date.now(), lastSeen: Date.now() });
+      headers["Mcp-Session-Id"] = sid;
+    } else if (sessionId) {
+      const s = sessions.get(sessionId);
+      if (s) s.lastSeen = Date.now();
+    }
+
+    res.writeHead(200, headers);
+    res.end(JSON.stringify(result));
+  });
+
+  srv.listen(port, host, () => {
+    process.stderr.write(
+      `[fanqie-writer] ${SERVER_NAME} v${SERVER_VERSION} 启动（HTTP）→ http://${host}:${port}/mcp\n`,
+    );
+  });
+  return srv;
+}
+
+// ---------------------------------------------------------------------------
+// 入口
+// ---------------------------------------------------------------------------
+
+function parseArgs(argv) {
+  const out = { httpPort: null, host: "127.0.0.1" };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--http" || a === "--sse") {
+      const nxt = argv[i + 1];
+      if (nxt && /^\d+$/.test(nxt)) {
+        out.httpPort = Number(nxt);
+        i++;
+      } else {
+        out.httpPort = 8787;
+      }
+    } else if (a.startsWith("--http=")) {
+      out.httpPort = Number(a.slice(7)) || 8787;
+    } else if (a === "--host") {
+      out.host = argv[i + 1] || "127.0.0.1";
+      i++;
+    } else if (a.startsWith("--host=")) {
+      out.host = a.slice(7);
+    } else if (a === "--version" || a === "-v") {
+      process.stdout.write(`${SERVER_VERSION}\n`);
+      process.exit(0);
+    } else if (a === "--help" || a === "-h") {
+      process.stdout.write(
+        [
+          `fanqie-writer-mcp v${SERVER_VERSION}`,
+          "",
+          "用法：",
+          "  node server.js                以 stdio 传输启动（默认）",
+          "  node server.js --http 8787    同时启动 Streamable HTTP（/mcp）",
+          "  node server.js --http 0       仅 HTTP 传输，端口随机（回显实际端口）",
+          "  node server.js --host 0.0.0.0 --http 8787   允许局域网/容器外访问",
+          "",
+          "环境变量：",
+          "  FANQIE_COOKIE / FANQIE_CSRF_TOKEN   优先于 auth.json 的鉴权来源",
+          "  FANQIE_HTTP_TOKEN                   启用后，HTTP 端点需带 Authorization: Bearer <token>",
+          "",
+        ].join("\n"),
+      );
+      process.exit(0);
+    }
+  }
+  return out;
+}
+
+function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  startStdio();
+  if (opts.httpPort !== null) {
+    startHttp(opts.httpPort, opts.host);
+  }
 }
 
 main();

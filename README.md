@@ -3,6 +3,7 @@
 番茄小说作家后台 MCP 服务——解决网页端一次只能传一章的问题，支持从本地稿件目录**批量上传**章节。
 
 - 零依赖：单文件 `server.js`，Node.js 直接运行，无需 npm install
+- 通用接入：遵循 MCP 标准，**任意兼容 MCP 的 Agent / IDE / 工作流平台**都能接入（stdio 与 Streamable HTTP 双传输）
 - 鉴权：复用你自己的浏览器登录态（Cookie + CSRF），不碰账号密码、不绕风控签名
 - 默认安全：批量上传先 `dry_run` 出计划，确认后才真正发送；单章默认存草稿
 
@@ -15,7 +16,8 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `server.js` | MCP 服务本体（stdio，零依赖） |
+| `server.js` | MCP 服务本体（stdio + Streamable HTTP 双传输，零依赖） |
+| `mcp-config.mjs` | 通用注册器：检测并写入任意 MCP 客户端的配置 |
 | `upload-batch.mjs` | 独立批量上传 CLI（`progress.json` 断点续传，支持 `--volumes` 分卷路由） |
 | `delete-batch.mjs` | 独立批量删除 CLI（重传修复前置） |
 | `capture-login.mjs` | CDP 启动 Edge 抓登录态，组装完整 Cookie 写入 `auth.json` |
@@ -157,11 +159,65 @@ batch_upload
 | `返回非 JSON（HTTP 4xx）` | 多半是 Cookie 过期或触发频控，换网络/稍后重试 |
 | 提示 `-3027` | 章节在审核中，改不了，等过审 |
 | 正文挤成一段 | 用 `preview_html` 自查；确认原稿是**一行一段**（空行分段两种都支持） |
-| 工具没出现 | 检查 `~/.workbuddy/mcp.json` 配置后重启 WorkBuddy |
+| 工具没出现 | 检查对应客户端的 MCP 配置是否写对（尤其根键名），改完重启客户端 |
 
-## 六、注册到 WorkBuddy
+## 六、接入任意 MCP 客户端
 
-`~/.workbuddy/mcp.json`：
+本服务遵循 Model Context Protocol 标准，**任何兼容 MCP 的 Agent / IDE / 工作流平台都能接入**，不绑定特定厂商。服务提供两种传输：
+
+| 传输 | 启动方式 | 适用客户端 |
+| --- | --- | --- |
+| **stdio**（默认） | `node server.js` | 本地客户端：Claude Desktop、Cursor、VS Code、Windsurf、Cline、Roo Code、Zed、Trae、Cherry Studio、Claude Code、Gemini CLI、Codex CLI、Continue、OpenCode、WorkBuddy… |
+| **Streamable HTTP** | `node server.js --http 8787` | 平台型 / 远程客户端：Dify、n8n、扣子 Coze、ChatGPT Connectors、OpenAI Agents SDK、自建 Web Agent… |
+
+两种传输共用同一份工具实现，行为完全一致。
+
+### 6.1 最省事：自动注册脚本
+
+```bash
+node mcp-config.mjs          # 列出本机检测到的客户端
+node mcp-config.mjs --all    # 写入所有检测到的客户端
+node mcp-config.mjs -t cursor,zed
+```
+
+脚本会按各客户端的**真实根键与路径**写入 JSON 配置，**保留你已有的其它 MCP 配置**，并在覆盖前自动生成 `.bak-时间戳` 备份。Continue（YAML）与 Codex CLI（TOML）不是 JSON 格式，脚本会直接输出可粘贴的片段。
+
+| 参数 | 说明 |
+| --- | --- |
+| `--all` | 写入所有检测到的客户端 |
+| `-t, --target <id>` | 写入指定客户端，逗号分隔 |
+| `--dry-run` | 只预览要写入的内容，不落盘 |
+| `--http` | 写远程模式条目（需先启动 `--http` 服务） |
+| `--port <n>` | 远程模式端口，默认 8787 |
+| `--node <路径>` | 指定 node 可执行文件（客户端解析不到 PATH 时用） |
+
+支持的客户端 id：`claude-desktop`、`claude-code`、`cursor`、`vscode`、`windsurf`、`cline`、`roo-code`、`zed`、`trae`、`cherry-studio`、`gemini-cli`、`amazon-q`、`opencode`、`workbuddy`、`lmstudio`、`continue`、`codex`。
+
+### 6.2 手动配置片段
+
+先确认你的客户端用哪种根键——**根键写错不会报错，只是工具不出现**，这是最常见的坑。
+
+| 客户端 | 根键 | 配置位置（Windows / macOS / Linux） |
+| --- | --- | --- |
+| Claude Desktop | `mcpServers` | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Claude Code | `mcpServers` | `~/.claude.json`（或项目根 `.mcp.json`） |
+| Cursor | `mcpServers` | `~/.cursor/mcp.json`（项目级 `.cursor/mcp.json`） |
+| **VS Code (Copilot)** | **`servers`** | `.vscode/mcp.json`（工作区）/ `~/.vscode/mcp.json`（用户） |
+| Windsurf | `mcpServers` | `~/.codeium/windsurf/mcp_config.json` |
+| Cline | `mcpServers` | `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` |
+| Roo Code | `mcpServers` | `%APPDATA%\Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json` |
+| **Zed** | **`context_servers`** | `%APPDATA%\Zed\settings.json` |
+| Trae | `mcpServers` | `~/.trae/mcp.json`（项目级 `.trae/mcp.json`） |
+| Cherry Studio | `mcpServers` | `%APPDATA%\CherryStudio\cherry-studio.json` |
+| Gemini CLI | `mcpServers` | `~/.gemini/settings.json` |
+| Amazon Q | `mcpServers` | `~/.aws/amazonq/mcp.json` |
+| **OpenCode** | **`mcp`** | `~/.config/opencode/opencode.json` |
+| WorkBuddy | `mcpServers` | `~/.workbuddy/mcp.json` |
+| LM Studio | `mcpServers` | `~/.lmstudio/mcp.json` |
+| Continue | `mcpServers`（YAML 列表） | `~/.continue/config.yaml` |
+| Codex CLI | `mcp_servers`（TOML） | `~/.codex/config.toml` |
+
+**通用 JSON 片段**（适用于 `mcpServers` 根键的客户端）：
 
 ```json
 {
@@ -174,4 +230,122 @@ batch_upload
 }
 ```
 
-配置变更后需在连接器管理页确认自定义 MCP 已受信任并生效（新 MCP 不会自动激活）。
+**VS Code**（根键是 `servers`，远程条目必须显式写 `type`）：
+
+```json
+{
+  "servers": {
+    "fanqie-writer": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["<你的路径>/fanqie-writer-mcp/server.js"]
+    }
+  }
+}
+```
+
+**Zed**（根键是 `context_servers`）：
+
+```json
+{
+  "context_servers": {
+    "fanqie-writer": {
+      "command": "node",
+      "args": ["<你的路径>/fanqie-writer-mcp/server.js"],
+      "env": {}
+    }
+  }
+}
+```
+
+**OpenCode**（根键是 `mcp`，命令写成数组）：
+
+```json
+{
+  "mcp": {
+    "fanqie-writer": {
+      "type": "local",
+      "command": ["node", "<你的路径>/fanqie-writer-mcp/server.js"],
+      "enabled": true
+    }
+  }
+}
+```
+
+**Continue**（YAML，`mcpServers` 是列表）：
+
+```yaml
+mcpServers:
+  - name: fanqie-writer
+    command: node
+    args:
+      - <你的路径>/fanqie-writer-mcp/server.js
+```
+
+**Codex CLI**（TOML）：
+
+```toml
+[mcp_servers.fanqie-writer]
+command = "node"
+args = ["<你的路径>/fanqie-writer-mcp/server.js"]
+```
+
+### 6.3 平台型 Agent：HTTP 模式
+
+Dify、n8n、扣子、ChatGPT Connectors 这类平台不拉起本地进程，只接受一个 HTTP 端点。先把服务跑起来：
+
+```bash
+node server.js --http 8787
+```
+
+端点地址：`http://127.0.0.1:8787/mcp`（健康检查：`/health`）
+
+在平台侧填：
+
+```json
+{
+  "mcpServers": {
+    "fanqie-writer": {
+      "type": "http",
+      "url": "http://127.0.0.1:8787/mcp"
+    }
+  }
+}
+```
+
+平台通常跑在容器或远端机器上，此时用 `--host 0.0.0.0` 监听，并**务必设置访问令牌**：
+
+```bash
+FANQIE_HTTP_TOKEN=你的随机长串 node server.js --http 8787 --host 0.0.0.0
+```
+
+客户端带上令牌：
+
+```json
+{
+  "mcpServers": {
+    "fanqie-writer": {
+      "type": "http",
+      "url": "http://127.0.0.1:8787/mcp",
+      "headers": { "Authorization": "Bearer 你的随机长串" }
+    }
+  }
+}
+```
+
+> 未设置 `FANQIE_HTTP_TOKEN` 时端点不校验鉴权，仅建议用于本机回环地址。
+
+### 6.4 命令行速查
+
+```bash
+node server.js                # stdio（默认）
+node server.js --http 8787    # 同时开启 Streamable HTTP
+node server.js --http 0       # 仅 HTTP，端口随机
+node server.js --help         # 全部参数
+```
+
+### 6.5 接入后自检
+
+1. 客户端里能看到 9 个工具：`check_auth`、`list_books`、`use_book`、`list_volumes`、`list_chapters`、`upload_chapter`、`batch_upload`、`update_chapter`、`preview_html`。
+2. 调 `check_auth` 返回 `auth: "ok"` 与账号下的作品列表。
+3. 工具不出现时，按顺序排查：根键名是否正确（见 6.2 表）→ 客户端是否需重启 → 客户端日志里的启动命令是否报错 → `node server.js` 手动跑一遍看 stderr。
