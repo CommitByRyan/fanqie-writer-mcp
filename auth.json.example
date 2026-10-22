@@ -1,0 +1,7 @@
+{
+  "cookie": "把浏览器请求头里的 Cookie 整行粘贴到这里",
+  "csrfToken": "把 x-secsdk-csrf-token 的值粘贴到这里",
+  "msToken": "",
+  "aBogus": "",
+  "userAgent": ""
+}

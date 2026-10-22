@@ -1,0 +1,8 @@
+# 统一以 LF 存储，避免 Windows 检出时污染脚本与 JSON
+* text=auto eol=lf
+
+# 二进制资源不做换行转换
+*.png binary
+*.jpg binary
+*.zip binary
+*.tgz binary

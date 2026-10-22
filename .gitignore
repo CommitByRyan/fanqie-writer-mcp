@@ -1,0 +1,21 @@
+# ===== 凭据与登录态（绝不提交）=====
+auth.json
+state.json
+.browser-profile/
+
+# ===== 运行时产物 =====
+node_modules/
+*.log
+*-log*.txt
+progress*.json
+delete-progress.json
+
+# ===== 一次性探查脚本（含个人 book_id，不随仓库分发）=====
+probe-chapter-ui.mjs
+
+# ===== 编辑器 / 系统杂项 =====
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

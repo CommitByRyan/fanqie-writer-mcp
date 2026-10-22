@@ -1,0 +1,39 @@
+{
+  "name": "fanqie-writer-mcp",
+  "version": "1.0.0",
+  "description": "番茄小说作家后台 MCP 服务——从本地稿件目录批量上传章节（零依赖，Node 直接运行）",
+  "keywords": [
+    "mcp",
+    "fanqie",
+    "fanqienovel",
+    "番茄小说",
+    "writer",
+    "batch-upload"
+  ],
+  "license": "MIT",
+  "main": "server.js",
+  "bin": {
+    "fanqie-writer-mcp": "server.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "upload": "node upload-batch.mjs",
+    "delete": "node delete-batch.mjs",
+    "capture-login": "node capture-login.mjs",
+    "capture-token": "node capture-write-token.mjs"
+  },
+  "engines": {
+    "node": ">=22.4.0"
+  },
+  "files": [
+    "server.js",
+    "upload-batch.mjs",
+    "delete-batch.mjs",
+    "capture-login.mjs",
+    "capture-write-token.mjs",
+    "cdp.mjs",
+    "chapter-ui.mjs",
+    "auth.json.example",
+    "README.md"
+  ]
+}
