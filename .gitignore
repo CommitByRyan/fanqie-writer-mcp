@@ -9,6 +9,7 @@ node_modules/
 *-log*.txt
 progress*.json
 delete-progress.json
+*.tgz
 
 # ===== 一次性探查脚本（含个人 book_id，不随仓库分发）=====
 probe-chapter-ui.mjs
