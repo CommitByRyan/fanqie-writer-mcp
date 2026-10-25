@@ -68,9 +68,9 @@
 
 ### source 三种形态
 
-1. **作品目录（灵枢式）**：目录含 `chapters.json` + `chapters/NNNN.md`，自动取 `number`/`title`/`volume` 与 `file` 指向的正文。例：`灵枢作品/ziyeping`。
+1. **作品目录（章节索引式）**：目录含 `chapters.json` + `chapters/NNNN.md`，自动取 `number`/`title`/`volume` 与 `file` 指向的正文。例：`我的作品/某书`。
 2. **普通目录**：目录下 `*.md` 按文件名排序；首行「第N章 标题」作标题，否则用文件名里的数字。
-3. **manifest JSON**：`[{"title":"第1章 …","file":"a.md"}]` 或 `{"chapters":[…]}`（灵枢 chapters.json 即此类）。
+3. **manifest JSON**：`[{"title":"第1章 …","file":"a.md"}]` 或 `{"chapters":[…]}`（带 `chapters` 数组的 `chapters.json` 即此类）。
 
 ### 推荐流程（以《子夜屏》160 章为例）
 
@@ -79,7 +79,7 @@
 ② list_books                → 拿到《子夜屏》的 book_id（网页端先建好空书）
 ③ list_volumes              → 看已有分卷（三卷的话先在网页端分卷管理里建好）
 ④ batch_upload
-     source=灵枢作品/ziyeping
+     source=旧版作品归档/ziyeping
      book_id=<上一步的>
      range=1-5               → 先试 5 章
      mode=draft
@@ -122,7 +122,7 @@
 10. **独立上传脚本**：`upload-batch.mjs` 与 MCP 同一 API 合同，支持 `--range` 分批、`progress.json` 断点续传，适合 MCP 未重连同前的应急上传：
     ```
     node upload-batch.mjs --book <book_id> --volume <volume_id> --volume-name "正文" \
-        --source 灵枢作品/ziyeping --range 2-160 --mode publish --interval 2000
+        --source 旧版作品归档/ziyeping --range 2-160 --mode publish --interval 2000
     ```
 11. **Edge 保活**：bash/PowerShell 工具退出会连带杀掉子进程树里的 Edge；`Start-Process` 与 WMI Create 均不可用（后者被安全策略拦）。需要浏览器跨脚本存活时，用「单脚本全包」模式（launch → 操作 → exit 同脚本内完成）。
 12. **分卷上传（2026-10-21 重传实战）**：
@@ -135,11 +135,11 @@
 
 ## 四、多卷作品（volume_map）
 
-灵枢式 chapters.json 每章带 `volume: 1|2|3`。先在番茄后台「分卷管理」建好分卷（一次性网页操作），然后：
+章节索引式 `chapters.json` 每章带 `volume: 1|2|3`。先在番茄后台「分卷管理」建好分卷（一次性网页操作），然后：
 
 ```
 batch_upload
-  source=灵枢作品/ziyeping
+  source=旧版作品归档/ziyeping
   book_id=…
   volume_map={"1":{"volume_id":"卷ID-1","volume_name":"丁字巷的缝"},
               "2":{"volume_id":"卷ID-2","volume_name":"收屏人"},
