@@ -429,9 +429,9 @@ function parseCnNumber(s) {
 
 /**
  * 解析 source：
- *  - 目录且含 chapters.json + chapters/  → 灵枢式（用 chapters.json 的 number/title/file/volume）
+ *  - 目录且含 chapters.json + chapters/  → 章节索引式（用 chapters.json 的 number/title/file/volume）
  *  - 目录 → 其下 *.md 按文件名排序
- *  - .json 文件 → manifest（灵枢式 chapters.json 或 [{title,content|file}]）
+ *  - .json 文件 → manifest（章节索引式 chapters.json 或 [{title,content|file}]）
  *  - .md/.txt 文件 → 单章
  */
 function resolveSource(source) {
@@ -480,7 +480,7 @@ function parseManifest(jsonPath) {
       if (body == null) throw new Error(`manifest 引用的文件不存在：${abs}`);
     }
     if (body == null) throw new Error(`manifest 第 ${idx + 1} 项缺少 content/file`);
-    // 灵枢章节 md 无标题行，正文整篇即 body；若正文首行恰是章节标题则由 build 前剥离
+    // 章节 md 无标题行，正文整篇即 body；若正文首行恰是章节标题则由 build 前剥离
     let title = it.title ?? it.chapter_title ?? "";
     let bodyText = String(body);
     const firstLine = bodyText.split(/\r?\n/).find((l) => l.trim());
